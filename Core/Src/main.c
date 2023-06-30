@@ -33,12 +33,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-//#define BUF_LEN 110464
-//#define BUF_LEN 120242
-//#define BUF_LEN 65460
-#define BUF_LEN 91284
-#define buf_size 512
-//#define BUFSIZE 512
 #define BUFSIZE 512
 #define MIN(a,b) (((a)<(b))? (a):(b))
 typedef void (*funcP)(uint8_t channels, uint16_t numSamples, void *pIn, uint16_t *pOutput);
@@ -59,18 +53,14 @@ TIM_HandleTypeDef htim4;
 TIM_HandleTypeDef htim7;
 
 /* USER CODE BEGIN PV */
-FATFS FatFs, fatfs;
-FRESULT res, fresult;
+FATFS FatFs;
+FRESULT res;
 DIR dir;
 FILINFO fno;
-FIL myfile, fil;
+FIL fil;
 UINT br;
-uint32_t bufSize = 0; // kich thuoc du lieu doc ra
-uint32_t addStep = 0; // vi tri du lieu dang doc ra tren toan bo kich thuoc cua tep
-uint8_t buf[BUF_LEN] = {0};
-
 uint8_t flg_dma_done;
-uint8_t receive_arr[100], byte_read = 0;
+
 static uint16_t fileBuffer[BUFSIZE];
 static uint16_t dmaBuffer[2][BUFSIZE];
 static uint16_t dmaBank = 0;
@@ -90,26 +80,16 @@ static void MX_TIM4_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static void
-setSampleRate(uint16_t freq)
+static void setSampleRate(uint16_t freq)
 {
-  //uint16_t period = (168000000 / (freq * (99 + 1))) - 1;
-	uint16_t period = (168000000 / freq ) - 1;
-//  htim7.Instance = TIM7;
-//  //htim7.Init.Prescaler = 99;
-//  htim7.Init.Prescaler = 0;
-//  htim7.Init.CounterMode = TIM_COUNTERMODE_UP;
-//  htim7.Init.Period = period;
-//  //htim7.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-//  htim7.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
-//  HAL_TIM_Base_Init(&htim7);
-	htim4.Instance = TIM4;
-	htim4.Init.Prescaler = 0;
-	htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
-	htim4.Init.Period = period;
-	htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-	htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-	HAL_TIM_Base_Init(&htim4);
+  uint16_t period = (168000000 / (freq * (99 + 1))) - 1;
+  htim7.Instance = TIM7;
+  htim7.Init.Prescaler = 49;
+  htim7.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim7.Init.Period = period;
+  htim7.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim7.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  HAL_TIM_Base_Init(&htim7);
 }
 
 static inline uint16_t
@@ -159,18 +139,16 @@ prepareDACBuffer_16Bit(uint8_t channels, uint16_t numSamples, void *pIn, uint16_
   }
 }
 
-static void
-outputSamples(FIL *fil, struct Wav_Header *header)
+static void outputSamples(FIL *fil, struct Wav_Header *header)
 {
-  const uint16_t channels = header->channels; // channel = 1
-  const uint16_t bytesPerSample = header->bitsPerSample / 8; // = 1
+  const uint16_t channels = header->channels;
+  const uint16_t bytesPerSample = header->bitsPerSample / 8;
 
   funcP prepareData = (header->bitsPerSample == 8)? prepareDACBuffer_8Bit : prepareDACBuffer_16Bit;
 
-  //flg_dma_done = 1;
   dmaBank = 0;
 
-  uint32_t bytes_last = header->dataChunkLength; // BUF_LEN
+  uint32_t bytes_last = header->dataChunkLength;
   do
   {
 	  int blksize = (header->bitsPerSample == 8)? MIN(bytes_last, BUFSIZE / 2) : MIN(bytes_last, BUFSIZE);
@@ -187,7 +165,7 @@ outputSamples(FIL *fil, struct Wav_Header *header)
 
 	    prepareData(channels, numSamples, pInput, pOutput);
 	    while(HAL_DAC_GetState(&hdac) != HAL_DAC_STATE_READY);
-	    HAL_DAC_Stop_DMA(&hdac, DAC_CHANNEL_2);
+	    HAL_DAC_Start(&hdac, DAC_CHANNEL_2);
 	    HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_2, (uint32_t*)dmaBuffer[dmaBank], numSamples, DAC_ALIGN_12B_R);
 	    dmaBank = !dmaBank;
 	    bytes_last -= blksize;
@@ -196,8 +174,7 @@ outputSamples(FIL *fil, struct Wav_Header *header)
   HAL_DAC_Stop_DMA(&hdac, DAC_CHANNEL_2);
 }
 
-static uint8_t
-isSupprtedWavFile(const struct Wav_Header *header)
+static uint8_t isSupprtedWavFile(const struct Wav_Header *header)
 {
   if (strncmp(header->riff, "RIFF", 4 ) != 0)
     return 0;
@@ -240,62 +217,6 @@ done :
     return;
 }
 
-//void sample(FIL *fil, struct Wav_Header *header)
-//{
-//	  const uint8_t channels = header->channels;
-//	  const uint8_t bytesPerSample = header->bitsPerSample / 8;
-//	  uint32_t buf_len = header->dataChunkLength;
-//}
-
-static void playAudio(char *name)
-{
-	//f_mount(&fatfs, "/emb",0);
-
-	res = f_open(&myfile, name, FA_READ);
-	if(res != FR_OK)
-	{
-		Error_Handler();
-	}
-	else
-	{
-		uint32_t fileSize = f_size(&myfile);
-		memset(buf, 0, BUF_LEN);
-		do
-		{
-			if(fileSize < BUF_LEN)
-			{
-				bufSize = fileSize;
-			}
-			else
-			{
-				bufSize = BUF_LEN;
-			}
-			f_lseek(&myfile, addStep);
-			if(res != FR_OK)
-			{
-				Error_Handler();
-			}
-			res = f_read(&myfile, buf, bufSize, (UINT*)&br);
-			if(res != FR_OK)
-			{
-				Error_Handler();
-			}
-			fileSize -= bufSize;
-			addStep += bufSize;
-			HAL_TIM_Base_Start(&htim7);
-			HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_2, (uint32_t*)buf, bufSize, DAC_ALIGN_8B_R);
-			while(HAL_DAC_GetState(&hdac) != HAL_DAC_STATE_READY);
-		}while(fileSize > 0);
-		addStep = 0;
-		memset(buf, 0, BUF_LEN);
-		f_lseek(&myfile, addStep);
-        HAL_TIM_Base_Stop(&htim7);
-        HAL_DAC_Stop_DMA(&hdac, DAC_CHANNEL_2);
-        f_close(&myfile);
-	}
-	f_mount(&fatfs, "", 1);
-}
-
 /* USER CODE END 0 */
 
 /**
@@ -333,17 +254,10 @@ int main(void)
   MX_FATFS_Init();
   MX_TIM4_Init();
   /* USER CODE BEGIN 2 */
-  //HAL_TIM_Base_Start(&htim7);
-  HAL_TIM_Base_Start(&htim4);
+  HAL_TIM_Base_Start(&htim7);
+  //HAL_TIM_Base_Start(&htim4);
   //HAL_DAC_Start_DMA(&hdac, DAC_CHANNEL_2, (uint32_t*)&soundValues, AudioDataEndAddr, DAC_ALIGN_8B_R);
 
-//  if(BSP_SD_Init() == MSD_OK)
-//  {
-//	  fresult = f_mount(&fatfs, "",1);
-//	  fresult = f_open(&myfile, "Text.txt", FA_READ);
-//	  fresult = f_read(&myfile,&receive_arr, f_size(&myfile), (UINT*)&byte_read);
-//	  f_close(&myfile);
-//  }
   res = f_mount(&FatFs, "", 0);
   if (res != FR_OK)
     return EXIT_FAILURE;
@@ -375,7 +289,6 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
   }
-  //  playAudio("test.wav");
   /* USER CODE END 3 */
 }
 
@@ -453,7 +366,7 @@ static void MX_DAC_Init(void)
 
   /** DAC channel OUT2 config
   */
-  sConfig.DAC_Trigger = DAC_TRIGGER_T4_TRGO;
+  sConfig.DAC_Trigger = DAC_TRIGGER_T7_TRGO;
   sConfig.DAC_OutputBuffer = DAC_OUTPUTBUFFER_ENABLE;
   if (HAL_DAC_ConfigChannel(&hdac, &sConfig, DAC_CHANNEL_2) != HAL_OK)
   {
@@ -556,7 +469,7 @@ static void MX_TIM7_Init(void)
 
   /* USER CODE END TIM7_Init 1 */
   htim7.Instance = TIM7;
-  htim7.Init.Prescaler = 0;
+  htim7.Init.Prescaler = 99;
   htim7.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim7.Init.Period = 65535;
   htim7.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
